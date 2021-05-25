@@ -36,7 +36,12 @@ DATE_PAT = re.compile(
 DATETIME_FMT = "yyyy(-?mm(-?dd(-?HHMM)?)?)?"
 SSH_DIR = Path.home() / ".ssh"
 
-DEFAULT_DIR_TEMPLATE = "{asset_class}/{frequency}/{bucket}"
+TEMPLATES = {
+    Frequency: "{frequency}/{bucket}",
+    AssetClass: "{asset_class}/{frequency}/{bucket}",
+    Bucket: "{bucket}",
+}
+DEFAULT_TEMPLATE = "{prefix}/{asset_class}/{frequency}/{bucket}"
 DEFAULT_PREFIX = Path("MI4")
 DEFAULT_HOST = "sftp.news.refinitiv.com"
 DATAFRAME_STR = "pandas://"
@@ -169,26 +174,29 @@ class DirOutput(Output):
             copyfileobj(in_, out)
 
 
-def sftp_dirs(
-    asset_class: AssetClass,
-    frequency: Frequency,
-    buckets: T.Tuple[Bucket, ...] = (),
-    dir_template: str = DEFAULT_DIR_TEMPLATE,
-    prefix: Path = DEFAULT_PREFIX,
-) -> T.Iterable[Path]:
-    """Generate directories where the files can be located on SFTP
-
-    :param buckets: Restrict to these time buckets. If empty, will use all: monthly, daily, minutely
-    """
-    for bucket in buckets or Bucket:
-        yield prefix / dir_template.format(
-            asset_class=asset_class.name + ("_COR" if frequency is Frequency.W365_UDAI else ""),
-            bucket=bucket.name,
-            frequency=frequency.name,
-        )
-
-
 class SFTPClient(paramiko.SFTPClient):
+    def iter_dirs(
+        self,
+        asset_class: AssetClass,
+        frequency: Frequency,
+        buckets: T.Tuple[Bucket, ...] = (),
+        template: str = DEFAULT_TEMPLATE,
+        prefix: Path = DEFAULT_PREFIX,
+    ) -> T.Iterable[Path]:
+        """Generate directories where the files can be located on SFTP
+
+        :param buckets: Restrict to these time buckets. If empty, will use all: monthly, daily, minutely
+        """
+        template = template or self.detect_template()
+        for bucket in buckets or Bucket:
+            dir = template.format(
+                prefix=str(prefix),
+                asset_class=asset_class.name + ("_COR" if frequency is Frequency.W365_UDAI else ""),
+                bucket=bucket.name,
+                frequency=frequency.name,
+            )
+            yield Path(dir)
+
     def copy_files(self, dir: Path, period: Period, output: Output) -> int:
         """Copy remote files to output and return number of files copied"""
         try:
@@ -218,7 +226,7 @@ class SFTPClient(paramiko.SFTPClient):
         end: datetime,
         output: T.Union[Output, str] = DATAFRAME_STR,
         buckets: T.Tuple[Bucket, ...] = (),
-        trial: bool = False,
+        template: str = DEFAULT_TEMPLATE,
     ):
         """
         Download files from SFTP and either read them into dataframe or write to disk
@@ -234,20 +242,30 @@ class SFTPClient(paramiko.SFTPClient):
         "ls://" to list remote files without downloading
         :param buckets: Restrict search to given directories (daily / minutely / hourly).
         If empty (default), then search in all directories.
+        :param template: Template for directory structure.
+        Following variables will be substituted: {asset_class}, {frequency}, {bucket}.
+        If left empty, template will be detected based on directory listing.
         :returns: dataframe if output is DataFrameOutput
         """
         output = Output.parse(output)
-        self.copy_files_in_dirs(
-            sftp_dirs(
-                asset_class=asset_class,
-                frequency=frequency,
-                buckets=buckets,
-                prefix=DEFAULT_PREFIX / ("TRIAL" if trial else ""),
-            ),
-            period=(start, end),
-            output=output,
+        dirs = self.iter_dirs(
+            asset_class=asset_class, frequency=frequency, buckets=buckets, template=template
         )
+        self.copy_files_in_dirs(dirs, period=(start, end), output=output)
         return output.df if isinstance(output, DataFrameOutput) else None
+
+    def detect_template(self) -> str:
+        try:
+            dir, *dirs = self.listdir()
+        except ValueError:
+            raise paramiko.SFTPError("Empty root folder")
+        for ty, template in TEMPLATES.items():
+            try:
+                _ = ty(dir)
+                return template
+            except ValueError:
+                continue
+        raise paramiko.SFTPError("Can't detect directory structure")
 
 
 class Transport(paramiko.Transport):
@@ -260,9 +278,10 @@ class Transport(paramiko.Transport):
         return transport
 
 
-def connect(user: str, key: T.Optional[Path] = None, host: str = DEFAULT_HOST):
+def connect(user: str, key: T.Optional[Path] = None, host: str = DEFAULT_HOST) -> SFTPClient:
     """Connect to host using credentials and return SFTPClient"""
-    return SFTPClient.from_transport(Transport.from_user_key_host(user=user, key=key, host=host))
+    transport = Transport.from_user_key_host(user=user, key=key, host=host)
+    return SFTPClient.from_transport(transport)  # type:ignore
 
 
 class Args(argparse.Namespace):
@@ -329,7 +348,7 @@ def cli_parser() -> ArgumentParser:
         metavar="FILE|DIR/",
     )
     cli.add_argument("--prefix", help="Directory prefix", default=DEFAULT_PREFIX, type=Path)
-    cli.add_argument("--dir-template", help="Directory structure", default=DEFAULT_DIR_TEMPLATE)
+    cli.add_argument("--template", help="Directory structure", default=DEFAULT_TEMPLATE)
     cli.add_argument("--trial", action="store_true")
     return cli
 
@@ -341,13 +360,13 @@ if __name__ == "__main__":
     logger.addHandler(logging.StreamHandler())
     logger.debug(f"Log level: {logger.getEffectiveLevel()}.\nCLI args: {args!r}")
     period = args.parse_period()
-    dirs = sftp_dirs(
-        asset_class=args.asset_class,
-        frequency=args.frequency,
-        buckets=args.buckets,
-        dir_template=args.dir_template,
-        prefix=args.prefix / ("TRIAL" if args.trial else ""),
-    )
     with connect(user=args.user, key=args.key, host=args.host) as sftp:
+        dirs = sftp.iter_dirs(
+            asset_class=args.asset_class,
+            frequency=args.frequency,
+            buckets=args.buckets,
+            template=args.template,
+            prefix=args.prefix / ("TRIAL" if args.trial else ""),
+        )
         sftp.copy_files_in_dirs(dirs, period=period, output=args.get_output())  # type:ignore
 
