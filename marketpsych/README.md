@@ -19,3 +19,7 @@ The main function you'll be interacting with is
 ```
 
 which will take your choice of asset class, period, and frequency and either download the data to disk or to memory.
+
+## Using it
+
+A notebook will be provided where you can set parameters through widgets.
