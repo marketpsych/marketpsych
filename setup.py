@@ -13,8 +13,8 @@ setup(
           'paramiko',
       ],
   classifiers=[ 
-    'Development Status :: 4 - Alpha',
-    'Intended Audience :: Financial Quants',
+    'Development Status :: 3 - Alpha',
+    'Intended Audience :: Developers',
     'License :: MIT License',
     'Programming Language :: Python :: 3.7',
     'Programming Language :: Python :: 3.8',
