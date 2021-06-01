@@ -2,7 +2,7 @@ from distutils.core import setup
 setup(
   name = 'marketpsych',
   packages = ['marketpsych'],
-  version = '0.0.1',
+  version = '0.0.1.1',
   license='MIT',
   description = 'MarketPsych libraries',
   url = 'https://github.com/marketpsych/marketpsych',
