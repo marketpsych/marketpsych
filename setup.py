@@ -5,6 +5,8 @@ setup(
   version = '0.0.1',
   license='MIT',
   description = 'MarketPsych libraries',
+  long_description = file: README.md
+  long_description_content_type = text/markdown
   url = 'https://github.com/marketpsych/marketpsych',
   keywords = ['sentiment'],
   install_requires=[
