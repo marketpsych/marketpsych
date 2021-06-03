@@ -42,7 +42,7 @@ TEMPLATES = {
     Bucket: "{bucket}",
 }
 DEFAULT_TEMPLATE = "{prefix}/{asset_class}/{frequency}/{bucket}"
-DEFAULT_PREFIX = Path("MI4")
+DEFAULT_PREFIX = Path("/mrn-mi-w/PRO/MI4")
 DEFAULT_HOST = "sftp.news.refinitiv.com"
 DATAFRAME_STR = "pandas://"
 LS_STR = "ls://"
@@ -226,6 +226,8 @@ class SFTPClient(paramiko.SFTPClient):
         end: datetime,
         output: T.Union[Output, str] = DATAFRAME_STR,
         buckets: T.Tuple[Bucket, ...] = (),
+        prefix: Path = DEFAULT_PREFIX,
+        trial: bool = False,
         template: str = DEFAULT_TEMPLATE,
     ):
         """
@@ -242,14 +244,20 @@ class SFTPClient(paramiko.SFTPClient):
         "ls://" to list remote files without downloading
         :param buckets: Restrict search to given directories (daily / minutely / hourly).
         If empty (default), then search in all directories.
+        :param prefix: Root folder on remote side
+        :param trial: if true, append TRIAL to prefix
         :param template: Template for directory structure.
-        Following variables will be substituted: {asset_class}, {frequency}, {bucket}.
-        If left empty, template will be detected based on directory listing.
+        If empty, template will be detected based on directory listing.
+        If not empty, these variables will be substituted: prefix, asset_class, frequency, bucket.
         :returns: dataframe if output is DataFrameOutput
         """
         output = Output.parse(output)
         dirs = self.iter_dirs(
-            asset_class=asset_class, frequency=frequency, buckets=buckets, template=template
+            asset_class=asset_class,
+            frequency=frequency,
+            buckets=buckets,
+            template=template,
+            prefix=prefix / ("TRIAL" if trial else ""),
         )
         self.copy_files_in_dirs(dirs, period=(start, end), output=output)
         return output.df if isinstance(output, DataFrameOutput) else None
