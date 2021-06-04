@@ -9,6 +9,7 @@ For more details check out our [website](https://www.marketpsych.com/).
 ## Features
  - Coverage includes +35,000 assets
  - News and social media sources provided separately
+ - History back to 1998
 
  ## Install MarketPsych supporting library
 
