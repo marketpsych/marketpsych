@@ -295,6 +295,7 @@ def load_private_key(key: T.Union[Path, T.TextIO]):
     except paramiko.SSHException:  # not OpenSSH format. Try parsing as Putty key
         pub, pvt = putty_key_messages(io.StringIO(key_str))
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.hazmat.backends import default_backend
 
         d, p, q, iqmp = pvt.get_mpint(), pvt.get_mpint(), pvt.get_mpint(), pvt.get_mpint()
         pvt_key = rsa.RSAPrivateNumbers(
@@ -305,7 +306,7 @@ def load_private_key(key: T.Union[Path, T.TextIO]):
             dmp1=rsa.rsa_crt_dmp1(d, p),
             dmq1=rsa.rsa_crt_dmq1(d, q),
             public_numbers=paramiko.RSAKey(pub).public_numbers,
-        ).private_key()
+        ).private_key(backend=default_backend())
         return paramiko.RSAKey(key=pvt_key)
 
 
