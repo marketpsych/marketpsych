@@ -8,7 +8,7 @@ import pandas as pd
 
 ASSET_CLASSES = "CMPNY CMPNY_AMER CMPNY_APAC CMPNY_EMEA CMPNY_ESG CMPNY_GRP COM_AGR COM_ENM COU COU_ESG COU_MKT CRYPTO CUR".split()
 FREQUENCIES = "W365_UDAI WDAI_UDAI WDAI_UHOU W01M_U01M".split()
-NOT_RMAS = "id assetCode windowTimestamp dataType systemVersion".split()
+NOT_RMAS = "id assetCode windowTimestamp dataType systemVersion ticker".split()
 DEFAULT_FREQUENCY = 'WDAI_UDAI'
 DEFAULT_ASSET_CLASS = 'COM_ENM'
 DEFAULT_START = datetime.datetime(2020, 12, 1)
@@ -76,6 +76,9 @@ class SlicerWidgets(LoaderWidgets):
         Widgets for slicing the dataframe.
         """
         self.df_ = df
+        # Combobox later only works if assetCode is str
+        self.df_.assetCode = df.assetCode.astype(str)
+
         self.dataTypes_ = self.df_.dataType.unique().tolist()
         self.assets_ = self.df_.assetCode.unique().tolist()
         self.rmas_ = list(set(self.df_.columns) - set(NOT_RMAS))
@@ -95,11 +98,12 @@ class SlicerWidgets(LoaderWidgets):
             value = 'sentiment' if 'sentiment' in self.rmas_ else self.rmas_[0]
             )
 
-        self.asset_widget = widgets.Dropdown(
+        self.asset_widget = widgets.Combobox(
                 options=(sorted(self.assets_)),
                 description='Asset:',
                 disabled=False,
-                value = self.assets_[0]
+                value = self.assets_[0],
+                continuous_update=False
             )
 
         self.rolling_widget = widgets.BoundedIntText(
