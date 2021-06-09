@@ -59,15 +59,15 @@ class LoaderWidgets:
         self.end_date_widget.value = datetime.datetime(d.year, d.month, d.day)
 
     def display(self):
-    """
-    Display widgets.
-    """
-    widgets_ = [self.asset_class_widget, 
-                self.frequency_widget, 
-                self.start_date_widget, 
-                self.end_date_widget]
-    for widget in widgets_:
-        display(widget)
+        """
+        Display widgets.
+        """
+        widgets_ = [self.asset_class_widget, 
+                    self.frequency_widget, 
+                    self.start_date_widget, 
+                    self.end_date_widget]
+        for widget in widgets_:
+            display(widget)
 
 
 class SlicerWidgets(LoaderWidgets):
@@ -125,9 +125,9 @@ class SlicerWidgets(LoaderWidgets):
         self._common_filtering()
 
     def display(self):
-    """
-    Display widgets.
-    """
+        """
+        Display widgets.
+        """
         input_widgets = widgets.HBox([
             self.dataType_widget, self.rma_widget, self.asset_widget])
         display(input_widgets)
