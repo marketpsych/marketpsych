@@ -20,6 +20,11 @@ class LoaderWidgets:
         """
         Widgets for loading the data into notebook.
         """
+        self.trial_check_widget = widgets.Checkbox(
+            value=True,
+            description='Trial',
+            disabled=False
+            )
         self.asset_class_widget = widgets.Dropdown(
             description='Asset class:',
             disabled=False,
@@ -62,7 +67,8 @@ class LoaderWidgets:
         """
         Display widgets.
         """
-        widgets_ = [self.asset_class_widget, 
+        widgets_ = [self.trial_check_widget,
+                    self.asset_class_widget, 
                     self.frequency_widget, 
                     self.start_date_widget, 
                     self.end_date_widget]
