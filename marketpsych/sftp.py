@@ -276,20 +276,24 @@ class SFTPClient(paramiko.SFTPClient):
         raise paramiko.SFTPError("Can't detect directory structure")
 
 
-class Transport(paramiko.Transport):
-    @classmethod
-    def from_user_key_host(cls, user: str, host: str = DEFAULT_HOST, key: T.Optional[Path] = None):
-        """Create SFTP transport and connect"""
-        pkey = paramiko.RSAKey.from_private_key_file(str(key or SSH_DIR / user), password=None)
-        transport = cls(host)
-        transport.connect(username=user, pkey=pkey)
-        return transport
+def load_private_key(key: T.Union[Path, T.TextIO]):
+    if isinstance(key, io.IOBase):
+        return paramiko.RSAKey.from_private_key(key)
+    return paramiko.RSAKey.from_private_key_file(str(key))
 
 
-def connect(user: str, key: T.Optional[Path] = None, host: str = DEFAULT_HOST) -> SFTPClient:
-    """Connect to host using credentials and return SFTPClient"""
-    transport = Transport.from_user_key_host(user=user, key=key, host=host)
-    return SFTPClient.from_transport(transport)  # type:ignore
+def connect(
+    user: str, key: T.Union[None, Path, T.TextIO] = None, host: str = DEFAULT_HOST
+) -> SFTPClient:
+    """
+    Connect to host using credentials and return SFTPClient
+    :param user: User ID as string
+    :param key: Private key file object or filepath. If None, will use SSH_DIR/user
+    :param host: SFTP server hostname
+    """
+    transport = paramiko.Transport(host)
+    transport.connect(username=user, pkey=load_private_key(key or SSH_DIR / user))
+    return SFTPClient.from_transport(transport)  # type: ignore
 
 
 class Args(argparse.Namespace):
