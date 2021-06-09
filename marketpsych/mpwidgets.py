@@ -62,12 +62,12 @@ class LoaderWidgets:
     """
     Display widgets.
     """
-        widgets_ = [self.asset_class_widget, 
-                    self.frequency_widget, 
-                    self.start_date_widget, 
-                    self.end_date_widget]
-        for widget in widgets_:
-            display(widget)
+    widgets_ = [self.asset_class_widget, 
+                self.frequency_widget, 
+                self.start_date_widget, 
+                self.end_date_widget]
+    for widget in widgets_:
+        display(widget)
 
 
 class SlicerWidgets(LoaderWidgets):
