@@ -12,7 +12,6 @@ setup(
   long_description=long_description,
   long_description_content_type="text/markdown",
   license='MIT',
-  description = 'MarketPsych libraries',
   url = 'https://github.com/marketpsych/marketpsych',
   keywords = ['sentiment'],
   install_requires=[
