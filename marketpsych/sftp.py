@@ -14,6 +14,8 @@ from dataclasses import dataclass
 import typing as T
 import io
 import paramiko
+from itertools import islice
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -276,10 +278,35 @@ class SFTPClient(paramiko.SFTPClient):
         raise paramiko.SFTPError("Can't detect directory structure")
 
 
+def putty_key_messages(lines: T.TextIO) -> T.Iterable[paramiko.Message]:
+    for line in lines:
+        m = re.search(r"-Lines:\s*(\d+)", line)
+        if m:
+            yield paramiko.Message(
+                base64.standard_b64decode("".join(s.strip() for s in islice(lines, int(m[1]))))
+            )
+
+
 def load_private_key(key: T.Union[Path, T.TextIO]):
-    if isinstance(key, io.IOBase):
-        return paramiko.RSAKey.from_private_key(key)
-    return paramiko.RSAKey.from_private_key_file(str(key))
+    with open(key) if isinstance(key, (str, Path)) else key as f:
+        key_str = f.read()
+    try:
+        return paramiko.RSAKey.from_private_key(io.StringIO(key_str))
+    except paramiko.SSHException:  # not OpenSSH format. Try parsing as Putty key
+        pub, pvt = putty_key_messages(io.StringIO(key_str))
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        d, p, q, iqmp = pvt.get_mpint(), pvt.get_mpint(), pvt.get_mpint(), pvt.get_mpint()
+        pvt_key = rsa.RSAPrivateNumbers(
+            p=p,
+            q=q,
+            d=d,
+            iqmp=iqmp,
+            dmp1=rsa.rsa_crt_dmp1(d, p),
+            dmq1=rsa.rsa_crt_dmq1(d, q),
+            public_numbers=paramiko.RSAKey(pub).public_numbers,
+        ).private_key()
+        return paramiko.RSAKey(key=pvt_key)
 
 
 def connect(
