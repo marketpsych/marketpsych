@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from IPython.display import display
 import datetime
+import io
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -13,6 +14,50 @@ DEFAULT_FREQUENCY = 'WDAI_UDAI'
 DEFAULT_ASSET_CLASS = 'COM_ENM'
 DEFAULT_START = datetime.datetime(2020, 12, 1)
 DEFAULT_END = datetime.datetime(2020, 12, 31)
+
+
+class LoginWidgets:
+    def __init__(self):
+        """
+        Widgets for setting credentials
+        """
+        self.key_widget = widgets.FileUpload(
+            accept='', 
+            description='Key file:',
+            multiple=False
+            )
+
+        self.id_widget = widgets.Text(
+            value='',
+            placeholder='Type your User ID',
+            description='User ID:',
+            disabled=False
+            )
+
+        self.key_widget.observe(self._key_handler, names='value')
+
+    def _key_handler(self, change):
+        """
+        If a new file is uploaded, get key attributes.
+        """
+        self._key = change.new
+        self._key_name = list(self._key.keys())[0]
+        self._id_suggest = self._key_name.split(".")[0]
+        self._key_content = change.new[self._key_name]['content']
+        # Creates new attribute in key to hold content in byte format
+        self.key_widget.content = io.StringIO(change.new\
+            [self._key_name]['content'].decode())
+        # Updates ID widget with likely ID number from key name
+        self.id_widget.value = self._id_suggest
+
+    def display(self):
+        """
+        Display widgets.
+        """
+        widgets_ = widgets.HBox([
+            self.key_widget,
+            self.id_widget])
+        display(widgets_)
 
 
 class LoaderWidgets:
@@ -166,7 +211,8 @@ class SlicerWidgets(LoaderWidgets):
             roll = self.rolling_widget.value
             temp.index = pd.to_datetime(temp.index).strftime("%Y-%m-%d")
             fig, ax = plt.subplots(figsize=(14, 7))
-            temp.rolling(roll, min_periods=min(10, roll)).mean().plot(ax=ax)
+            temp.rolling(roll, min_periods=min(10, roll)).mean()\
+                .plot(ax=ax, c="blue", lw=2)
             plt.show()
 
     def _event_handler(self, change):
