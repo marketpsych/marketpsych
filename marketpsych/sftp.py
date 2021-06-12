@@ -92,12 +92,14 @@ def parse_file_period(filename):
 class Output:
     """Object which determines how to copy input files into output file or directory"""
 
+    def __init__(self):
+        self.result = None
+
     def copy(self, in_, filename):
         pass
 
-    def copy_file(self, sftp_open, fp, attr):
-        logger.info(f"Getting {fp}")
-        with sftp_open(str(fp)) as in_:
+    def copy_file(self, sftp, fp, attr):
+        with sftp.open(str(fp)) as in_:
             in_.prefetch(attr.st_size)  # like in getfo() implementation
             return decompress(in_, fp, self.copy)
 
@@ -151,18 +153,19 @@ class FileOutput(Output):
             buf = read(32768)
 
 
-@dataclass
 class DataFrameOutput(Output):
     """Read files into pandas DataFrame"""
 
-    df: T.Any = None
-
-    def copy(self, in_, filename):
+    def copy_file(self, sftp, fp, attr):
         import pandas as pd
 
-        df: pd.DataFrame = pd.read_csv(in_, sep="\t", na_values="")  # type: ignore
+        bs = io.BytesIO()
+        sftp.getfo(str(fp), bs)
+        df: pd.DataFrame = pd.read_csv(
+            bs, sep="\t", na_values="", compression="zip" if fp.suffix == ".zip" else None
+        )  # type:ignore
         logger.debug(f"{type(self)}: Appending {len(df)} records")
-        self.df = df if self.df is None else self.df.append(df, ignore_index=True)
+        self.result = self.result.append(df, ignore_index=True) if self.result else df
 
 
 @dataclass(frozen=True)
@@ -171,9 +174,8 @@ class DirOutput(Output):
 
     out: Path
 
-    def copy(self, in_, filename):
-        with open(self.out / filename, "wb") as out:
-            copyfileobj(in_, out)
+    def copy_file(self, sftp, fp, attr):
+        sftp.get(str(fp), str(self.out / fp.name))
 
 
 class SFTPClient(paramiko.SFTPClient):
@@ -210,7 +212,9 @@ class SFTPClient(paramiko.SFTPClient):
         matching = [attr for attr in listing if overlaps(period, parse_file_period(attr.filename))]
         logger.info(f"Found {len(matching)} files in {dir}")
         for attr in matching:
-            output.copy_file(self.open, dir / attr.filename, attr)
+            fp = dir / attr.filename
+            logger.info(f"Getting {fp}")
+            output.copy_file(self, fp, attr)
         return len(matching)
 
     def copy_files_in_dirs(self, dirs: T.Iterable[Path], period: Period, output: Output):
@@ -262,7 +266,7 @@ class SFTPClient(paramiko.SFTPClient):
             prefix=prefix / ("TRIAL" if trial else ""),
         )
         self.copy_files_in_dirs(dirs, period=(start, end), output=output)
-        return output.df if isinstance(output, DataFrameOutput) else None
+        return output.result
 
     def detect_template(self) -> str:
         try:
@@ -408,5 +412,8 @@ if __name__ == "__main__":
             template=args.template,
             prefix=args.prefix / ("TRIAL" if args.trial else ""),
         )
-        sftp.copy_files_in_dirs(dirs, period=period, output=args.get_output())  # type:ignore
+        output = args.get_output()
+        sftp.copy_files_in_dirs(dirs, period=period, output=output)  # type:ignore
+        if vars(output).get("result", None) is not None:
+            print(output.result)
 
