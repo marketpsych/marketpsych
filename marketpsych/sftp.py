@@ -165,7 +165,7 @@ class DataFrameOutput(Output):
             bs, sep="\t", na_values="", compression="zip" if fp.suffix == ".zip" else None
         )  # type:ignore
         logger.debug(f"{type(self)}: Appending {len(df)} records")
-        self.result = self.result.append(df, ignore_index=True) if self.result else df
+        self.result = self.result.append(df, ignore_index=True) if self.result is not None else df
 
 
 @dataclass(frozen=True)
