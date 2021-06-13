@@ -92,8 +92,9 @@ def parse_file_period(filename):
 class Output:
     """Object which determines how to copy input files into output file or directory"""
 
-    def __init__(self):
-        self.result = None
+    @property
+    def result(self):
+        pass
 
     def copy(self, in_, filename):
         pass
@@ -104,12 +105,15 @@ class Output:
             return decompress(in_, fp, self.copy)
 
     @staticmethod
-    def parse(path: T.Union["Output", str]) -> "Output":
-        """If path is None, create FileOutput(stdout)
-        If path ends with slash, create DirOutput
-        Otherwise, create FileOutput"""
-        if isinstance(path, Output):
-            return path
+    def parse(path: str) -> "Output":
+        """
+        :param path: Possible options:
+        - "pandas://" to read remote files into dataframe and return it.
+        - "ls://" to list remote files without downloading
+        - "" (empty string) to concatenate into stdout
+        - FILEPATH to concatenate remote files into single file on disk.
+        - DIR/ or '.' to download files one-by-one into directory.
+        """
         if not path:
             return FileOutput(sys.stdout.buffer)
         if path == DATAFRAME_STR:
@@ -153,8 +157,15 @@ class FileOutput(Output):
             buf = read(32768)
 
 
+@dataclass
 class DataFrameOutput(Output):
     """Read files into pandas DataFrame"""
+
+    df: T.Any = None  # should be pd.DataFrame, but don't want to import pandas yet
+
+    @property
+    def result(self):
+        return self.df
 
     def copy_file(self, sftp, fp, attr):
         import pandas as pd
@@ -165,7 +176,7 @@ class DataFrameOutput(Output):
             bs, sep="\t", na_values="", compression="zip" if fp.suffix == ".zip" else None
         )  # type:ignore
         logger.debug(f"{type(self)}: Appending {len(df)} records")
-        self.result = self.result.append(df, ignore_index=True) if self.result is not None else df
+        self.df = df if self.df is None else self.df.append(df, ignore_index=True)
 
 
 @dataclass(frozen=True)
@@ -223,6 +234,7 @@ class SFTPClient(paramiko.SFTPClient):
             logger.warning("No files found within time range")
         else:
             logger.debug(f"Processed {n_files} files")
+        return output.result
 
     def download(
         self,
@@ -230,7 +242,7 @@ class SFTPClient(paramiko.SFTPClient):
         frequency: Frequency,
         start: datetime,
         end: datetime,
-        output: T.Union[Output, str] = DATAFRAME_STR,
+        output: Output = DataFrameOutput(),
         buckets: T.Tuple[Bucket, ...] = (),
         prefix: Path = DEFAULT_PREFIX,
         trial: bool = False,
@@ -243,11 +255,7 @@ class SFTPClient(paramiko.SFTPClient):
         :param frequency: window length and update frequency, e.g. Frequency.W01M_U01M
         :param start: period start
         :param end: period end
-        :param output:
-        "pandas://" (default) to read remote files into dataframe and return it.
-        FILEPATH to concatenate remote files into single file on disk.
-        DIR/ or '.' to downloaded files one-by-one into directory.
-        "ls://" to list remote files without downloading
+        :param output: Output instance, default is DataFrameOutput
         :param buckets: Restrict search to given directories (daily / minutely / hourly).
         If empty (default), then search in all directories.
         :param prefix: Root folder on remote side
@@ -257,7 +265,6 @@ class SFTPClient(paramiko.SFTPClient):
         If not empty, these variables will be substituted: prefix, asset_class, frequency, bucket.
         :returns: dataframe if output is DataFrameOutput
         """
-        output = Output.parse(output)
         dirs = self.iter_dirs(
             asset_class=asset_class,
             frequency=frequency,
@@ -265,8 +272,7 @@ class SFTPClient(paramiko.SFTPClient):
             template=template,
             prefix=prefix / ("TRIAL" if trial else ""),
         )
-        self.copy_files_in_dirs(dirs, period=(start, end), output=output)
-        return output.result
+        return self.copy_files_in_dirs(dirs, period=(start, end), output=output)
 
     def detect_template(self) -> str:
         try:
@@ -329,9 +335,6 @@ def connect(
 
 
 class Args(argparse.Namespace):
-    def get_output(self):
-        return MockOutput() if self.ls else Output.parse(self.output)
-
     def loglevel(self):
         return max(logging.WARNING + 10 * (self.quiet - self.verbose), logging.DEBUG)
 
@@ -377,19 +380,12 @@ def cli_parser() -> ArgumentParser:
     cli.enum_arg(Frequency, "frequency")
     cli.date_arg("start", default=str(date.today()))
     cli.date_arg("end")
-    cli.add_argument("--ls", action="store_true", help="Don't download, only list matching files")
     cli.enum_arg(Bucket, "--buckets", "-b", action="append", help="Restrict to these time buckets")
     cli.add_argument("--host", default=DEFAULT_HOST, help="Hostname of SFTP server")
     cli.count_opt("--verbose", "-v", help="More verbose output (also try -vv)")
     cli.count_opt("--quiet", "-q", help="Less verbose output (also try -qq)")
     cli.add_argument(
-        "--output",
-        "-o",
-        help="""Output location.
-        If ends with slash, it'll be treated as directory, and matching files will be copied there one-by-one.
-        If it doesn't end with slash, it's treated as file, and matching remote files will be concatenated.
-        By default, will print to STDOUT.""",
-        metavar="FILE|DIR/",
+        "--output", "-o", type=Output.parse, help=Output.parse.__doc__, metavar="FILE|DIR/"
     )
     cli.add_argument("--prefix", help="Directory prefix", default=DEFAULT_PREFIX, type=Path)
     cli.add_argument("--template", help="Directory structure", default=DEFAULT_TEMPLATE)
@@ -403,17 +399,19 @@ if __name__ == "__main__":
     logger.setLevel(args.loglevel())
     logger.addHandler(logging.StreamHandler())
     logger.debug(f"Log level: {logger.getEffectiveLevel()}.\nCLI args: {args!r}")
-    period = args.parse_period()
+    start, end = args.parse_period()
     with connect(user=args.user, key=args.key, host=args.host) as sftp:
-        dirs = sftp.iter_dirs(
+        result = sftp.download(
             asset_class=args.asset_class,
             frequency=args.frequency,
             buckets=args.buckets,
             template=args.template,
-            prefix=args.prefix / ("TRIAL" if args.trial else ""),
+            prefix=args.prefix,
+            trial=args.trial,
+            output=args.output,
+            start=start,
+            end=end,
         )
-        output = args.get_output()
-        sftp.copy_files_in_dirs(dirs, period=period, output=output)  # type:ignore
-        if vars(output).get("result", None) is not None:
-            print(output.result)
+        if result is not None:
+            print(result)
 
