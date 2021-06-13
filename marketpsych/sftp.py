@@ -16,6 +16,7 @@ import io
 import paramiko
 from itertools import islice
 import base64
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -242,7 +243,7 @@ class SFTPClient(paramiko.SFTPClient):
         frequency: Frequency,
         start: datetime,
         end: datetime,
-        output: Output = DataFrameOutput(),
+        output: T.Union[Output, str] = DataFrameOutput(),
         buckets: T.Tuple[Bucket, ...] = (),
         prefix: Path = DEFAULT_PREFIX,
         trial: bool = False,
@@ -272,7 +273,11 @@ class SFTPClient(paramiko.SFTPClient):
             template=template,
             prefix=prefix / ("TRIAL" if trial else ""),
         )
-        return self.copy_files_in_dirs(dirs, period=(start, end), output=output)
+        return self.copy_files_in_dirs(
+            dirs,
+            period=(start, end),
+            output=output if isinstance(output, Output) else Output.parse(output),
+        )
 
     def detect_template(self) -> str:
         try:
@@ -385,7 +390,11 @@ def cli_parser() -> ArgumentParser:
     cli.count_opt("--verbose", "-v", help="More verbose output (also try -vv)")
     cli.count_opt("--quiet", "-q", help="Less verbose output (also try -qq)")
     cli.add_argument(
-        "--output", "-o", type=Output.parse, help=Output.parse.__doc__, metavar="FILE|DIR/"
+        "--output",
+        "-o",
+        type=str if os.environ.get("SFTP_TEST") else Output.parse,
+        help=Output.parse.__doc__,
+        metavar="FILE|DIR/",
     )
     cli.add_argument("--prefix", help="Directory prefix", default=DEFAULT_PREFIX, type=Path)
     cli.add_argument("--template", help="Directory structure", default=DEFAULT_TEMPLATE)
