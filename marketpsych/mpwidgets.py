@@ -8,7 +8,9 @@ import pandas as pd
 
 
 ASSET_CLASSES = "CMPNY CMPNY_AMER CMPNY_APAC CMPNY_EMEA CMPNY_ESG CMPNY_GRP COM_AGR COM_ENM COU COU_ESG COU_MKT CRYPTO CUR".split()
+CMPNY_CLASSES = "CMPNY CMPNY_AMER CMPNY_APAC CMPNY_EMEA CMPNY_ESG".split()
 FREQUENCIES = "W365_UDAI WDAI_UDAI WDAI_UHOU W01M_U01M".split()
+HIGH_FREQUENCIES = "WDAI_UHOU W01M_U01M".split()
 NOT_RMAS = "id assetCode windowTimestamp dataType systemVersion ticker".split()
 DEFAULT_FREQUENCY = 'WDAI_UDAI'
 DEFAULT_ASSET_CLASS = 'COM_ENM'
@@ -92,11 +94,15 @@ class LoaderWidgets:
             disabled=False,
             value = DEFAULT_END
             )
+        # Warns the user in case of certain choices
+        self.warning_widget = widgets.Output()
 
         # Renew dates information if user changes them. It is used to avoid
         # dates being passed to sftp as datetime.date rather than datetime.datetime
         self.start_date_widget.observe(self._start_date_handler, names='value')
         self.end_date_widget.observe(self._end_date_handler, names='value')
+        self.asset_class_widget.observe(self._memory_event_handler, names='value')
+        self.frequency_widget.observe(self._memory_event_handler, names='value')
 
     def _start_date_handler(self, change):
         """Makes sure start_date is datetime.datetime"""
@@ -108,6 +114,13 @@ class LoaderWidgets:
         d = self.end_date_widget.value
         self.end_date_widget.value = datetime.datetime(d.year, d.month, d.day)
 
+    def _memory_event_handler(self, change):
+        self.warning_widget.clear_output()
+        with self.warning_widget:
+            if (self.asset_class_widget.value in CMPNY_CLASSES) or \
+               (self.frequency_widget.value in HIGH_FREQUENCIES):
+                print("WARNING: Extremely memory demanding!!!")
+
     def display(self):
         """
         Display widgets.
@@ -116,7 +129,8 @@ class LoaderWidgets:
                     self.asset_class_widget, 
                     self.frequency_widget, 
                     self.start_date_widget, 
-                    self.end_date_widget]
+                    self.end_date_widget, 
+                    self.warning_widget]
         for widget in widgets_:
             display(widget)
 
