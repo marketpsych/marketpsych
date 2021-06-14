@@ -171,11 +171,11 @@ class DataFrameOutput(Output):
     def copy_file(self, sftp, fp, attr):
         import pandas as pd
 
-        bs = io.BytesIO()
-        sftp.getfo(str(fp), bs)
-        df: pd.DataFrame = pd.read_csv(
-            bs, sep="\t", na_values="", compression="zip" if fp.suffix == ".zip" else None
-        )  # type:ignore
+        with io.BytesIO() as bs:
+            sftp.getfo(str(fp), bs)
+            df: pd.DataFrame = pd.read_csv(
+                bs, sep="\t", na_values="", compression="zip" if fp.suffix == ".zip" else None
+            )  # type:ignore
         logger.debug(f"{type(self)}: Appending {len(df)} records")
         self.df = df if self.df is None else self.df.append(df, ignore_index=True)
 
@@ -422,5 +422,7 @@ if __name__ == "__main__":
             end=end,
         )
         if result is not None:
+            if hasattr(result, "memory_usage"):
+                logger.info("Memory usage: %dk", int(result.memory_usage(deep=True).sum() / 1024))
             print(result)
 
