@@ -17,7 +17,7 @@ For more details check out our [website](https://www.marketpsych.com/).
     * 300+ cryptocurrencies
 * **Long history**: 1998 to the present
 * **Multi-language**: sources in 12 languages
-* **AI-based**: Machine learning NLP system
+* **AI-based**: machine learning NLP system
 * **Highly granular**: 100+ scores
 * **Real-time**: 60-second, hourly, and daily updates
 * **Sources**: 6000+ news and social media outlets
