@@ -243,7 +243,8 @@ class SFTPClient(paramiko.SFTPClient):
         frequency: Frequency,
         start: datetime,
         end: datetime,
-        output: T.Union[Output, str] = DataFrameOutput(),
+        output: T.Union[Output, str] = "pandas://",
+        init=None,
         buckets: T.Tuple[Bucket, ...] = (),
         prefix: Path = DEFAULT_PREFIX,
         trial: bool = False,
@@ -257,6 +258,7 @@ class SFTPClient(paramiko.SFTPClient):
         :param start: period start
         :param end: period end
         :param output: Output instance, default is DataFrameOutput
+        :param init: Append to this dataframe (not in-place)
         :param buckets: Restrict search to given directories (daily / minutely / hourly).
         If empty (default), then search in all directories.
         :param prefix: Root folder on remote side
@@ -276,7 +278,11 @@ class SFTPClient(paramiko.SFTPClient):
         return self.copy_files_in_dirs(
             dirs,
             period=(start, end),
-            output=output if isinstance(output, Output) else Output.parse(output),
+            output=DataFrameOutput(init)
+            if init
+            else output
+            if isinstance(output, Output)
+            else Output.parse(output),
         )
 
     def detect_template(self) -> str:
