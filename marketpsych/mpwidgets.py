@@ -25,7 +25,7 @@ class LoginWidgets:
         """
         self.key_widget = widgets.FileUpload(
             accept='', 
-            description='Key file:',
+            description='Key File:',
             multiple=False
             )
 
@@ -184,6 +184,20 @@ class SlicerWidgets(LoaderWidgets):
                 readout_format='d'
             )
 
+        self.minval_widget = widgets.BoundedIntText(
+                value=1,
+                min=1,
+                max=len(self.dates_),
+                step=1,
+                description='Min. period:',
+                disabled=False,
+                continuous_update=True,
+                orientation='horizontal',
+                readout=True,
+                readout_format='d'
+            )
+    
+
         self.output = widgets.Output()
         self.plot_output = widgets.Output()
 
@@ -191,6 +205,7 @@ class SlicerWidgets(LoaderWidgets):
         self.rma_widget.observe(self._event_handler, names='value')
         self.asset_widget.observe(self._event_handler, names='value')
         self.rolling_widget.observe(self._event_handler, names='value')
+        self.minval_widget.observe(self._event_handler, names='value')
         self._common_filtering()
 
     def display(self):
@@ -201,7 +216,7 @@ class SlicerWidgets(LoaderWidgets):
             self.dataType_widget, self.rma_widget, self.asset_widget])
         display(input_widgets)
 
-        plot_widgets = widgets.HBox([self.rolling_widget])
+        plot_widgets = widgets.HBox([self.rolling_widget, self.minval_widget])
         display(plot_widgets)
 
         tab = widgets.Tab([self.plot_output, self.output])
@@ -223,9 +238,10 @@ class SlicerWidgets(LoaderWidgets):
         with self.plot_output:
             temp = self.filtered_sr
             roll = self.rolling_widget.value
+            minval = self.minval_widget.value
             temp.index = pd.to_datetime(temp.index).strftime("%Y-%m-%d")
             fig, ax = plt.subplots(figsize=(14, 7))
-            temp.rolling(roll, min_periods=min(10, roll)).mean()\
+            temp.rolling(roll, min_periods=min(minval, roll)).mean()\
                 .plot(ax=ax, c="blue", lw=2)
             plt.show()
 
