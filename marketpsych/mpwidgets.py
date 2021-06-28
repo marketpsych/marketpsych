@@ -150,6 +150,12 @@ class SlicerWidgets(LoaderWidgets):
         self.dates_ = self.df_.windowTimestamp.sort_values().unique()
         self.filtered_sr = None
 
+        self.weighted_check_widget = widgets.Checkbox(
+            value=True,
+            description='Buzz-Weighted',
+            disabled=False
+            )
+
         self.dataType_widget = widgets.Dropdown(
             options=(sorted(self.dataTypes_)),
             description='Data Type:',
@@ -216,7 +222,7 @@ class SlicerWidgets(LoaderWidgets):
             self.dataType_widget, self.rma_widget, self.asset_widget])
         display(input_widgets)
 
-        plot_widgets = widgets.HBox([self.rolling_widget, self.minval_widget])
+        plot_widgets = widgets.HBox([self.weighted_check_widget, self.rolling_widget, self.minval_widget])
         display(plot_widgets)
 
         tab = widgets.Tab([self.plot_output, self.output])
