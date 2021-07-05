@@ -22,12 +22,12 @@ For more details check out our [website](https://www.marketpsych.com/).
 * **Real-time**: 60-second, hourly, and daily updates
 * **Sources**: 6000+ news and social media outlets
 
- ## Install MarketPsych supporting library
+## Install MarketPsych supporting library
 
- ### pip  
- ```
- pip install marketpsych
- ```
+### pip  
+```
+pip install marketpsych
+```
 
 ## Modules
 If using Jupyter Notebook, be sure to have version >= 6.0. If using Jupyter Lab, be sure to have version >= 3.0.
