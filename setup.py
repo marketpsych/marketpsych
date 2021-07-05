@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 setup(
   name='marketpsych',
   packages=['marketpsych'],
-  version='0.0.6',
+  version='0.0.7',
   author='MarketPsych Data',
   description='Python libraries for working with MarketPsych\'s feeds',
   long_description=long_description,
