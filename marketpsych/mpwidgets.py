@@ -5,6 +5,7 @@ import io
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import pandas as pd
+import numpy as np
 
 
 ASSET_CLASSES = "CMPNY CMPNY_AMER CMPNY_APAC CMPNY_EMEA CMPNY_ESG CMPNY_GRP COM_AGR COM_ENM COU COU_ESG COU_MKT CRYPTO CUR".split()
@@ -148,7 +149,8 @@ class SlicerWidgets(LoaderWidgets):
         self.assets_ = self.df_.assetCode.unique().tolist()
         self.rmas_ = list(set(self.df_.columns) - set(NOT_RMAS))
         self.dates_ = self.df_.windowTimestamp.sort_values().unique()
-        self.filtered_sr = None
+        self.filtered_rma = None
+        self.filtered_buzz = None
 
         self.weighted_check_widget = widgets.Checkbox(
             value=True,
@@ -212,6 +214,7 @@ class SlicerWidgets(LoaderWidgets):
         self.asset_widget.observe(self._event_handler, names='value')
         self.rolling_widget.observe(self._event_handler, names='value')
         self.minval_widget.observe(self._event_handler, names='value')
+        self.weighted_check_widget.observe(self._event_handler, names='value')
         self._common_filtering()
 
     def display(self):
@@ -235,21 +238,35 @@ class SlicerWidgets(LoaderWidgets):
         self.output.clear_output()
         self.plot_output.clear_output()
         
-        self.filtered_sr = self.df_[(self.df_.dataType == self.dataType_widget.value) & 
+        queried_df = self.df_[(self.df_.dataType == self.dataType_widget.value) & 
                             (self.df_.assetCode == self.asset_widget.value)]\
-                            .set_index('windowTimestamp')[[self.rma_widget.value]]
+                            .set_index('windowTimestamp')
+
+        self.filtered_rma = queried_df[[self.rma_widget.value]]
+        self.filtered_buzz = queried_df[["buzz"]]
         
-        with self.output:
-            display(self.filtered_sr)
         with self.plot_output:
-            temp = self.filtered_sr
             roll = self.rolling_widget.value
             minval = self.minval_widget.value
-            temp.index = pd.to_datetime(temp.index).strftime("%Y-%m-%d")
+
+            # Gets both RMA and buzz in the same time format
+            agg_rma = self.filtered_rma.copy()
+            agg_buzz = self.filtered_buzz.copy()
+            agg_rma.index = pd.to_datetime(agg_rma.index).strftime("%Y-%m-%d")
+            agg_buzz.index = pd.to_datetime(agg_buzz.index).strftime("%Y-%m-%d")
+
+            if self.weighted_check_widget.value:
+                agg_rma = np.multiply(agg_rma, agg_buzz).rolling(roll, min_periods=min(minval, roll)).sum()
+                agg_rma = np.divide(agg_rma, agg_buzz.rolling(roll, min_periods=1).sum())
+            else:
+                agg_rma = agg_rma.rolling(roll, min_periods=min(minval, roll)).mean()
+
+            #### Plot 
             fig, ax = plt.subplots(figsize=(14, 7))
-            temp.rolling(roll, min_periods=min(minval, roll)).mean()\
-                .plot(ax=ax, c="blue", lw=2)
+            agg_rma.plot(ax=ax, c="blue", lw=2)
             plt.show()
+        with self.output:
+            display(agg_rma)
 
     def _event_handler(self, change):
         self._common_filtering()
