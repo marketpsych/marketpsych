@@ -174,7 +174,11 @@ class DataFrameOutput(Output):
         with io.BytesIO() as bs:
             sftp.getfo(str(fp), bs)
             df: pd.DataFrame = pd.read_csv(
-                bs, sep="\t", na_values="", compression="zip" if fp.suffix == ".zip" else None
+                bs,
+                sep="\t",
+                na_values="",
+                parse_dates=["windowTimestamp"],
+                compression="zip" if fp.suffix == ".zip" else None,
             )  # type:ignore
         logger.debug(f"{type(self)}: Appending {len(df)} records")
         self.df = df if self.df is None else self.df.append(df, ignore_index=True)
