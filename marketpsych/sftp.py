@@ -173,6 +173,7 @@ class DataFrameOutput(Output):
 
         with io.BytesIO() as bs:
             sftp.getfo(str(fp), bs)
+            bs.seek(0)
             df: pd.DataFrame = pd.read_csv(
                 bs,
                 sep="\t",
