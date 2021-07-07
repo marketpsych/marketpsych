@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 ASSET_CLASSES = "CMPNY CMPNY_AMER CMPNY_APAC CMPNY_EMEA CMPNY_ESG CMPNY_GRP COM_AGR COM_ENM COU COU_ESG COU_MKT CRYPTO CUR".split()
 FREQUENCIES = "W365_UDAI WDAI_UDAI WDAI_UHOU W01M_U01M".split()
-BUCKETS = "monthly daily minutely".split()
+BUCKETS = "monthly daily hourly minutely".split()
 AssetClass = Enum("AssetClass", {ac: ac for ac in ASSET_CLASSES})
 Frequency = Enum("Frequency", {frq: frq for frq in FREQUENCIES})
 Bucket = Enum("Bucket", {grp: grp for grp in BUCKETS})
@@ -83,6 +83,19 @@ def parse_period(start, end=None):
 def overlaps(period1, period2):
     """Do periods intersect?"""
     return max(period1[0], period2[0]) <= min(period1[1], period2[1])
+
+
+def periods_union(periods: T.Iterable[T.Optional[Period]]):
+    try:
+        starts, ends = zip(*(per for per in periods if per))
+        return min(starts), max(ends)
+    except ValueError:
+        return None
+
+
+def is_subperiod(period1: Period, period2: T.Optional[Period]):
+    """Is period1 inside period2?"""
+    return period2 and period2[0] <= period1[0] and period1[1] <= period2[1]
 
 
 def parse_file_period(filename):
@@ -218,29 +231,32 @@ class SFTPClient(paramiko.SFTPClient):
             )
             yield Path(dir)
 
-    def copy_files(self, dir: Path, period: Period, output: Output) -> int:
-        """Copy remote files to output and return number of files copied"""
+    def matching(
+        self, dir: Path, period: Period, copied_period: T.Optional[Period]
+    ) -> T.Iterable[T.Tuple[paramiko.SFTPAttributes, Period]]:
         try:
             listing = self.listdir_attr(str(dir))
         except FileNotFoundError as e:
             logger.warning(f"{dir}: {e}")
-            return 0
+            return
         logger.debug(f"Searching in {dir}")
-        matching = [attr for attr in listing if overlaps(period, parse_file_period(attr.filename))]
-        logger.info(f"Found {len(matching)} files in {dir}")
-        for attr in matching:
-            fp = dir / attr.filename
+        for attr in listing:
+            file_period = parse_file_period(attr.filename)
+            if overlaps(period, file_period) and not is_subperiod(file_period, copied_period):
+                yield attr, file_period
+
+    def copy_files(
+        self, dir: Path, period: Period, copied_period: T.Optional[Period], output: Output
+    ) -> T.Tuple[int, T.Optional[Period]]:
+        """Copy remote files in dir to output and return number of files copied"""
+        matching = tuple(self.matching(dir, period, copied_period))
+        attrs, periods = zip(*matching) if matching else ([], [])
+        logger.info(f"Found {len(attrs)} files in {dir}")
+        for attr in attrs:
+            fp = dir / attr.filename  # type:ignore
             logger.info(f"Getting {fp}")
             output.copy_file(self, fp, attr)
-        return len(matching)
-
-    def copy_files_in_dirs(self, dirs: T.Iterable[Path], period: Period, output: Output):
-        n_files = sum(self.copy_files(dir, period=period, output=output) for dir in dirs)
-        if n_files == 0:
-            logger.warning("No files found within time range")
-        else:
-            logger.debug(f"Processed {n_files} files")
-        return output.result
+        return len(attrs), periods_union((copied_period, *periods))  # type:ignore
 
     def download(
         self,
@@ -273,22 +289,29 @@ class SFTPClient(paramiko.SFTPClient):
         If not empty, these variables will be substituted: prefix, asset_class, frequency, bucket.
         :returns: dataframe if output is DataFrameOutput
         """
-        dirs = self.iter_dirs(
+        output = (
+            DataFrameOutput(init)
+            if init
+            else (output if isinstance(output, Output) else Output.parse(output))
+        )
+        copied_period = None
+        n_files = 0
+        for dir in self.iter_dirs(
             asset_class=asset_class,
             frequency=frequency,
             buckets=buckets,
             template=template,
             prefix=prefix / ("TRIAL" if trial else ""),
-        )
-        return self.copy_files_in_dirs(
-            dirs,
-            period=(start, end),
-            output=DataFrameOutput(init)
-            if init
-            else output
-            if isinstance(output, Output)
-            else Output.parse(output),
-        )
+        ):
+            copied_files, copied_period = self.copy_files(
+                dir, period=(start, end), output=output, copied_period=copied_period
+            )
+            n_files += copied_files
+        if n_files == 0:
+            logger.warning("No files found within time range")
+        else:
+            logger.debug(f"Processed {n_files} files within period: {copied_period}")
+        return output.result
 
     def detect_template(self) -> str:
         try:
