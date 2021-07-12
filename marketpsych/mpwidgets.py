@@ -148,15 +148,11 @@ class SlicerWidgets(LoaderWidgets):
         self.dataTypes_ = self.df_.dataType.unique().tolist()
         self.assets_ = self.df_.assetCode.unique().tolist()
         self.rmas_ = list(set(self.df_.columns) - set(NOT_RMAS))
+        self.buzzes_ = [False] + sorted([col for col in self.rmas_ if 'buzz' in col.lower()])
         self.dates_ = self.df_.windowTimestamp.sort_values().unique()
+
         self.filtered_rma = None
         self.filtered_buzz = None
-
-        self.weighted_check_widget = widgets.Checkbox(
-            value=True,
-            description='Buzz-Weighted',
-            disabled=False
-            )
 
         self.dataType_widget = widgets.Dropdown(
             options=(sorted(self.dataTypes_)),
@@ -177,6 +173,13 @@ class SlicerWidgets(LoaderWidgets):
                 disabled=False,
                 value = self.assets_[0],
                 continuous_update=False
+            )
+
+        self.buzz_weight_widget = widgets.Dropdown(
+            options=self.buzzes_,
+            description='Weighted by:',
+            disabled=False,
+            value = False
             )
 
         self.rolling_widget = widgets.BoundedIntText(
@@ -205,17 +208,18 @@ class SlicerWidgets(LoaderWidgets):
                 readout_format='d'
             )
     
-
         self.output = widgets.Output()
         self.plot_output = widgets.Output()
 
-        self.dataType_widget.observe(self._event_handler, names='value')
-        self.rma_widget.observe(self._event_handler, names='value')
-        self.asset_widget.observe(self._event_handler, names='value')
-        self.rolling_widget.observe(self._event_handler, names='value')
-        self.minval_widget.observe(self._event_handler, names='value')
-        self.weighted_check_widget.observe(self._event_handler, names='value')
-        self._common_filtering()
+        self.dataType_widget.observe(self._common_filtering, names='value')
+        self.rma_widget.observe(self._common_filtering, names='value')
+        self.asset_widget.observe(self._common_filtering, names='value')
+        self.rolling_widget.observe(self._common_filtering, names='value')
+        self.minval_widget.observe(self._common_filtering, names='value')
+        self.buzz_weight_widget.observe(self._common_filtering, names='value')
+        # Already shows a plot with default configs
+        self._common_filtering(None)
+
 
     def display(self):
         """
@@ -225,7 +229,8 @@ class SlicerWidgets(LoaderWidgets):
             self.dataType_widget, self.rma_widget, self.asset_widget])
         display(input_widgets)
 
-        plot_widgets = widgets.HBox([self.weighted_check_widget, self.rolling_widget, self.minval_widget])
+        plot_widgets = widgets.HBox([
+           self.buzz_weight_widget, self.rolling_widget, self.minval_widget])
         display(plot_widgets)
 
         tab = widgets.Tab([self.plot_output, self.output])
@@ -234,7 +239,7 @@ class SlicerWidgets(LoaderWidgets):
         display(tab)
 
 
-    def _common_filtering(self):
+    def _common_filtering(self, change):
         self.output.clear_output()
         self.plot_output.clear_output()
         
@@ -243,19 +248,21 @@ class SlicerWidgets(LoaderWidgets):
                             .set_index('windowTimestamp')
 
         self.filtered_rma = queried_df[[self.rma_widget.value]]
-        self.filtered_buzz = queried_df[["buzz"]]
-        
+
         with self.plot_output:
             roll = self.rolling_widget.value
             minval = self.minval_widget.value
 
             # Gets both RMA and buzz in the same time format
             agg_rma = self.filtered_rma.copy()
-            agg_buzz = self.filtered_buzz.copy()
             agg_rma.index = pd.to_datetime(agg_rma.index).strftime("%Y-%m-%d")
-            agg_buzz.index = pd.to_datetime(agg_buzz.index).strftime("%Y-%m-%d")
 
-            if self.weighted_check_widget.value:
+            if self.buzz_weight_widget.value != False:
+                # Gets buzz in correct format
+                self.filtered_buzz = queried_df[[self.buzz_weight_widget.value]]
+                agg_buzz = self.filtered_buzz.copy()
+                agg_buzz.index = pd.to_datetime(agg_buzz.index).strftime("%Y-%m-%d")
+                # Recomputes RMA
                 agg_rma = np.multiply(agg_rma, agg_buzz).rolling(roll, min_periods=min(minval, roll)).sum()
                 agg_rma = np.divide(agg_rma, agg_buzz.rolling(roll, min_periods=1).sum())
             else:
@@ -267,9 +274,6 @@ class SlicerWidgets(LoaderWidgets):
             plt.show()
         with self.output:
             display(agg_rma)
-
-    def _event_handler(self, change):
-        self._common_filtering()
 
 
 
