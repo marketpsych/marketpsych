@@ -17,6 +17,7 @@ import paramiko
 from itertools import islice
 import base64
 import os
+import abc
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ TEMPLATES = {
 DEFAULT_TEMPLATE = "{prefix}/{asset_class}/{frequency}/{bucket}"
 DEFAULT_PREFIX = Path("/mrn-mi-w/PRO/MI4")
 DEFAULT_HOST = "sftp.news.refinitiv.com"
+DEFAULT_CACHE = Path("marketpsych_files")
+
 DATAFRAME_STR = "pandas://"
 LS_STR = "ls://"
 
@@ -110,13 +113,9 @@ class Output:
     def result(self):
         pass
 
-    def copy(self, in_, filename):
+    @abc.abstractmethod
+    def copy_file(self, sftp: "SFTPClient", fp: Path, attr):
         pass
-
-    def copy_file(self, sftp, fp, attr):
-        with sftp.open(str(fp)) as in_:
-            in_.prefetch(attr.st_size)  # like in getfo() implementation
-            return decompress(in_, fp, self.copy)
 
     @staticmethod
     def parse(path: str) -> "Output":
@@ -156,6 +155,9 @@ class FileOutput(Output):
 
     out: T.BinaryIO
     header: T.Optional[str] = None
+
+    def copy_file(self, sftp, fp, attr):
+        return sftp.decompress(fp, self.copy)
 
     def copy(self, in_, filename):
         write = self.out.write
@@ -205,10 +207,41 @@ class DirOutput(Output):
     out: Path
 
     def copy_file(self, sftp, fp, attr):
-        sftp.get(str(fp), str(self.out / fp.name))
+        sftp.get_file(fp, self.out)  # str(fp), str(self.out / fp.name))
 
 
-class SFTPClient(paramiko.SFTPClient):
+class CachingSFTPClient(paramiko.SFTPClient):
+    cache: Path
+
+    def cached_path(self, path: Path):
+        return self.cache / (path.relative_to("/") if path.is_absolute() else path)
+
+    def open(self, filename, mode="r", bufsize=-1):
+        if hasattr(self, "__inside_open"):
+            return super().open(filename=filename, mode=mode, bufsize=bufsize)
+        setattr(self, "__inside_open", True)
+        cached_path = self.cached_path(Path(filename))
+        if not cached_path.is_file() or cached_path.stat().st_size == 0:
+            cached_path.parent.mkdir(parents=True, exist_ok=True)
+            logger.debug("Copying file to cache: %s", filename)
+            super().get(str(filename), str(cached_path))
+        fr = open(cached_path, mode)
+        setattr(fr, "prefetch", lambda _: None)
+        delattr(self, "__inside_open")
+        return fr
+
+
+class SFTPClient(CachingSFTPClient):
+    def copy_to_dir(self, src: Path, dst: Path):
+        """Download to directory"""
+        return self.get(str(src), str(dst / src.name))
+
+    def decompress(self, fp: Path, attr, func: T.Callable):
+        with open(fp, "rb") if self.cached_path(fp).is_file() else sftp.open(str(fp)) as fr:
+            if isinstance(fr, paramiko.SFTPFile):
+                fr.prefetch(attr.st_size)  # like in getfo() implementation
+            return decompress(fr, fp, func)
+
     def iter_dirs(
         self,
         asset_class: AssetClass,
@@ -244,19 +277,6 @@ class SFTPClient(paramiko.SFTPClient):
             file_period = parse_file_period(attr.filename)
             if overlaps(period, file_period) and not is_subperiod(file_period, copied_period):
                 yield attr, file_period
-
-    def copy_files(
-        self, dir: Path, period: Period, copied_period: T.Optional[Period], output: Output
-    ) -> T.Tuple[int, T.Optional[Period]]:
-        """Copy remote files in dir to output and return number of files copied"""
-        matching = tuple(self.matching(dir, period, copied_period))
-        attrs, periods = zip(*matching) if matching else ([], [])
-        logger.info(f"Found {len(attrs)} files in {dir}")
-        for attr in attrs:
-            fp = dir / attr.filename  # type:ignore
-            logger.info(f"Getting {fp}")
-            output.copy_file(self, fp, attr)
-        return len(attrs), periods_union((copied_period, *periods))  # type:ignore
 
     def download(
         self,
@@ -303,10 +323,15 @@ class SFTPClient(paramiko.SFTPClient):
             template=template,
             prefix=prefix / ("TRIAL" if trial else ""),
         ):
-            copied_files, copied_period = self.copy_files(
-                dir, period=(start, end), output=output, copied_period=copied_period
-            )
-            n_files += copied_files
+            matching = tuple(self.matching(dir, (start, end), copied_period))
+            attrs, periods = zip(*matching) if matching else ([], [])
+            logger.info(f"Found {len(attrs)} files in {dir}")
+            for attr in attrs:
+                fp = dir / attr.filename  # type:ignore
+                logger.info(f"Getting {fp}")
+                output.copy_file(self, fp, attr)
+            copied_period = periods_union((copied_period, *periods))  # type:ignore
+            n_files += len(attrs)
         if n_files == 0:
             logger.warning("No files found within time range")
         else:
@@ -360,7 +385,10 @@ def load_private_key(key: T.Union[Path, T.TextIO]):
 
 
 def connect(
-    user: str, key: T.Union[None, Path, T.TextIO] = None, host: str = DEFAULT_HOST
+    user: str,
+    key: T.Union[None, Path, T.TextIO] = None,
+    host: str = DEFAULT_HOST,
+    cache: Path = DEFAULT_CACHE,
 ) -> SFTPClient:
     """
     Connect to host using credentials and return SFTPClient
@@ -370,7 +398,11 @@ def connect(
     """
     transport = paramiko.Transport(host)
     transport.connect(username=user, pkey=load_private_key(key or SSH_DIR / user))
-    return SFTPClient.from_transport(transport)  # type: ignore
+    client: T.Optional[SFTPClient] = SFTPClient.from_transport(transport)  # type:ignore
+    if client is None:
+        raise Exception("Couldn't connect to SFTP for some reason")
+    client.cache = cache
+    return client
 
 
 class Args(argparse.Namespace):
@@ -421,6 +453,7 @@ def cli_parser() -> ArgumentParser:
     cli.date_arg("end")
     cli.enum_arg(Bucket, "--buckets", "-b", action="append", help="Restrict to these time buckets")
     cli.add_argument("--host", default=DEFAULT_HOST, help="Hostname of SFTP server")
+    cli.add_argument("--cache", default=DEFAULT_CACHE, help="Cache dir, empty for no cache")
     cli.count_opt("--verbose", "-v", help="More verbose output (also try -vv)")
     cli.count_opt("--quiet", "-q", help="Less verbose output (also try -qq)")
     cli.add_argument(
@@ -443,7 +476,7 @@ if __name__ == "__main__":
     logger.addHandler(logging.StreamHandler())
     logger.debug(f"Log level: {logger.getEffectiveLevel()}.\nCLI args: {args!r}")
     start, end = args.parse_period()
-    with connect(user=args.user, key=args.key, host=args.host) as sftp:
+    with connect(user=args.user, key=args.key, host=args.host, cache=args.cache) as sftp:
         result = sftp.download(
             asset_class=args.asset_class,
             frequency=args.frequency,
