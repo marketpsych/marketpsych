@@ -186,16 +186,20 @@ class DataFrameOutput(Output):
     def copy_file(self, sftp, fp, attr):
         import pandas as pd
 
-        with io.BytesIO() as bs:
-            sftp.getfo(str(fp), bs)
-            bs.seek(0)
-            df: pd.DataFrame = pd.read_csv(
-                bs,
-                sep="\t",
-                na_values="",
-                parse_dates=["windowTimestamp"],
-                compression="zip" if fp.suffix == ".zip" else None,
-            )  # type:ignore
+        read_tsv = partial(
+            pd.read_csv,
+            sep="\t",
+            na_values="",
+            parse_dates=["windowTimestamp"],
+            compression="zip" if fp.suffix == ".zip" else None,
+        )
+        if isinstance(sftp, CachingSFTPClient):
+            df: pd.DataFrame = read_tsv(sftp.ensure_cache(fp))  # type: ignore
+        else:
+            with io.BytesIO() as bs:
+                sftp.getfo(str(fp), bs)
+                bs.seek(0)
+                df: pd.DataFrame = read_tsv(bs)  # type:ignore
         logger.debug(f"{type(self)}: Appending {len(df)} records")
         self.df = df if self.df is None else self.df.append(df, ignore_index=True)
 
@@ -216,15 +220,19 @@ class CachingSFTPClient(paramiko.SFTPClient):
     def cached_path(self, path: Path):
         return self.cache / (path.relative_to("/") if path.is_absolute() else path)
 
+    def ensure_cache(self, path: Path):
+        cached_path = self.cached_path(path)
+        if not cached_path.is_file() or cached_path.stat().st_size == 0:
+            cached_path.parent.mkdir(parents=True, exist_ok=True)
+            logger.debug("Copying file to cache: %s", path)
+            super().get(str(path), str(cached_path))
+        return cached_path
+
     def open(self, filename, mode="r", bufsize=-1):
         if hasattr(self, "__inside_open"):
             return super().open(filename=filename, mode=mode, bufsize=bufsize)
         setattr(self, "__inside_open", True)
-        cached_path = self.cached_path(Path(filename))
-        if not cached_path.is_file() or cached_path.stat().st_size == 0:
-            cached_path.parent.mkdir(parents=True, exist_ok=True)
-            logger.debug("Copying file to cache: %s", filename)
-            super().get(str(filename), str(cached_path))
+        cached_path = self.ensure_cache(Path(filename))
         fr = open(cached_path, mode)
         setattr(fr, "prefetch", lambda _: None)
         delattr(self, "__inside_open")
