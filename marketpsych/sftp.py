@@ -10,7 +10,7 @@ from pathlib import Path
 from shutil import copyfileobj
 from zipfile import ZipFile
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import typing as T
 import io
 import paramiko
@@ -18,6 +18,7 @@ from itertools import islice
 import base64
 import os
 import abc
+import zipfile
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ Period = T.Tuple[datetime, datetime]
 
 def decompress(obj, fp, func):
     """Decompress file-like object obj with filepath fp, and run func on it"""
+    fp = Path(fp)
     if fp.suffix == ".zip":
         with ZipFile(obj) as zf:
             try:
@@ -66,8 +68,8 @@ def decompress(obj, fp, func):
                 raise Exception("Must be exactly 1 entry in zip archive: {path}")
             with zf.open(info) as inner:
                 # return func(io.TextIOWrapper(obj))
-                return func(inner, info.filename)
-    return func(obj, fp.name)
+                return func(io.TextIOWrapper(inner), info.filename)
+    return func(io.TextIOWrapper(obj), fp.name)
 
 
 def parse_date(s: str, end=False) -> datetime:
@@ -114,7 +116,7 @@ class Output:
         pass
 
     @abc.abstractmethod
-    def copy_file(self, sftp: "SFTPClient", fp: Path, attr):
+    def copy_file(self, sftp: "SFTPClient", fp: Path, attr=None, accum=None):
         pass
 
     @staticmethod
@@ -145,7 +147,7 @@ class Output:
 class MockOutput(Output):
     """List input files and their attributes, don't copy anything"""
 
-    def copy_file(self, _, fp, attr):
+    def copy_file(self, _, fp, attr=None, accum=None):
         print(attr)
 
 
@@ -156,7 +158,7 @@ class FileOutput(Output):
     out: T.BinaryIO
     header: T.Optional[str] = None
 
-    def copy_file(self, sftp, fp, attr):
+    def copy_file(self, sftp, fp, attr=None, accum=None):
         return sftp.decompress(fp, self.copy)
 
     def copy(self, in_, filename):
@@ -173,35 +175,39 @@ class FileOutput(Output):
             buf = read(32768)
 
 
-@dataclass
+@dataclass(frozen=True)
 class DataFrameOutput(Output):
     """Read files into pandas DataFrame"""
 
-    df: T.Any = None  # should be pd.DataFrame, but don't want to import pandas yet
+    assets: T.Tuple[str, ...] = ()
+    read_csv_opts: T.Tuple[T.Tuple[str, T.Any], ...] = ()
 
-    @property
-    def result(self):
-        return self.df
+    def filter_assets(self, fr):
+        if not self.assets:
+            return fr
+        pat = re.compile(r"[^\t]*\t(?:{})\t".format("|".join(re.escape(s) for s in self.assets)))
+        buf = io.StringIO()
+        buf.write(next(fr))
+        for line in fr:
+            if pat.match(line):
+                buf.write(line)
+        buf.seek(0)
+        return buf
 
-    def copy_file(self, sftp, fp, attr):
+    def read_tsv(self, fr):
         import pandas as pd
 
-        read_tsv = partial(
-            pd.read_csv,
-            sep="\t",
-            na_values="",
-            parse_dates=["windowTimestamp"],
-            compression="zip" if fp.suffix == ".zip" else None,
-        )
-        if isinstance(sftp, CachingSFTPClient):
-            df: pd.DataFrame = read_tsv(sftp.ensure_cache(fp))  # type: ignore
-        else:
-            with io.BytesIO() as bs:
-                sftp.getfo(str(fp), bs)
-                bs.seek(0)
-                df: pd.DataFrame = read_tsv(bs)  # type:ignore
-        logger.debug(f"{type(self)}: Appending {len(df)} records")
-        self.df = df if self.df is None else self.df.append(df, ignore_index=True)
+        read_tsv = partial(pd.read_csv, sep="\t", na_values="", **dict(self.read_csv_opts))
+        df: pd.DataFrame = read_tsv(self.filter_assets(fr))  # type:ignore
+        logger.debug(f"{type(self)}: Loaded {len(df)} records")
+        if "windowTimestamp" in df.columns:
+            df.windowTimestamp = pd.to_datetime(df.windowTimestamp)
+        return df
+
+    def copy_file(self, sftp, fp, attr=None, accum=None):
+        with sftp.open(fp, "rb") as fr:
+            df = decompress(fr, fp, lambda f, _: self.read_tsv(f))  # type: ignore
+            return df if accum is None else accum.append(df, ignore_index=True)
 
 
 @dataclass(frozen=True)
@@ -210,7 +216,7 @@ class DirOutput(Output):
 
     out: Path
 
-    def copy_file(self, sftp, fp, attr):
+    def copy_file(self, sftp, fp, attr=None, accum=None):
         sftp.get_file(fp, self.out)  # str(fp), str(self.out / fp.name))
 
 
@@ -293,7 +299,7 @@ class SFTPClient(CachingSFTPClient):
         start: datetime,
         end: datetime,
         output: T.Union[Output, str] = "pandas://",
-        init=None,
+        assets: T.Tuple[str, ...] = (),
         buckets: T.Tuple[Bucket, ...] = (),
         prefix: Path = DEFAULT_PREFIX,
         trial: bool = False,
@@ -307,7 +313,7 @@ class SFTPClient(CachingSFTPClient):
         :param start: period start
         :param end: period end
         :param output: Output instance, default is DataFrameOutput
-        :param init: Append to this dataframe (not in-place)
+        :param assets: Filter by asset (implemented only for DataFrameOutput)
         :param buckets: Restrict search to given directories (daily / minutely / hourly).
         If empty (default), then search in all directories.
         :param prefix: Root folder on remote side
@@ -317,13 +323,11 @@ class SFTPClient(CachingSFTPClient):
         If not empty, these variables will be substituted: prefix, asset_class, frequency, bucket.
         :returns: dataframe if output is DataFrameOutput
         """
-        output = (
-            DataFrameOutput(init)
-            if init
-            else (output if isinstance(output, Output) else Output.parse(output))
-        )
+        output = output if isinstance(output, Output) else Output.parse(output)
+        output = replace(output, assets=assets) if isinstance(output, DataFrameOutput) else output
         copied_period = None
         n_files = 0
+        result = None
         for dir in self.iter_dirs(
             asset_class=asset_class,
             frequency=frequency,
@@ -337,14 +341,14 @@ class SFTPClient(CachingSFTPClient):
             for attr in attrs:
                 fp = dir / attr.filename  # type:ignore
                 logger.info(f"Getting {fp}")
-                output.copy_file(self, fp, attr)
+                result = output.copy_file(self, fp, attr, accum=result)
             copied_period = periods_union((copied_period, *periods))  # type:ignore
             n_files += len(attrs)
         if n_files == 0:
             logger.warning("No files found within time range")
         else:
             logger.debug(f"Processed {n_files} files within period: {copied_period}")
-        return output.result
+        return result
 
     def detect_template(self) -> str:
         try:
@@ -459,6 +463,7 @@ def cli_parser() -> ArgumentParser:
     cli.enum_arg(Frequency, "frequency")
     cli.date_arg("start", default=str(date.today()))
     cli.date_arg("end")
+    cli.add_argument("--assets", type=lambda s: s.split(","), help="Comma-separated list of assets")
     cli.enum_arg(Bucket, "--buckets", "-b", action="append", help="Restrict to these time buckets")
     cli.add_argument("--host", default=DEFAULT_HOST, help="Hostname of SFTP server")
     cli.add_argument("--cache", default=DEFAULT_CACHE, help="Cache dir, empty for no cache")
@@ -489,6 +494,7 @@ if __name__ == "__main__":
             asset_class=args.asset_class,
             frequency=args.frequency,
             buckets=args.buckets,
+            assets=args.assets,
             template=args.template,
             prefix=args.prefix,
             trial=args.trial,
