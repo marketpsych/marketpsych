@@ -68,7 +68,7 @@ def decompress(obj, fp, func):
                 raise Exception("Must be exactly 1 entry in zip archive: {path}")
             with zf.open(info) as inner:
                 # return func(io.TextIOWrapper(obj))
-                return func(io.TextIOWrapper(inner), info.filename)
+                return func(io.TextIOWrapper(inner), Path(info.filename))
     return func(io.TextIOWrapper(obj), fp.name)
 
 
@@ -105,7 +105,7 @@ def is_subperiod(period1: Period, period2: T.Optional[Period]):
 
 def parse_file_period(filename):
     """Parse time period of RMA filename"""
-    return parse_period(filename.split(".")[4])
+    return parse_period(str(filename).split(".")[4])
 
 
 class Output:
@@ -175,30 +175,70 @@ class FileOutput(Output):
             buf = read(32768)
 
 
+TSV_FIELD = r"[^\t]*"
+
+
+def choice_re(vals):
+    return f'(?:{"|".join(re.escape(s) for s in vals)})' if vals else None
+
+
+def line_re(header, **kwargs):
+    fields = []
+    for name, val in kwargs.items():
+        if val is not None:
+            ix = header.index(name)
+            fields += [TSV_FIELD] * (1 + ix - len(fields))
+            fields[ix] = val
+    pat = re.compile("\t".join(fields + [""]))
+    logger.debug(f"Line regex: {pat.pattern!r}")
+    return pat
+
+
 @dataclass(frozen=True)
 class DataFrameOutput(Output):
     """Read files into pandas DataFrame"""
 
     assets: T.Tuple[str, ...] = ()
+    sources: T.Tuple[str, ...] = ()
+    start: datetime = datetime.min
+    end: datetime = datetime.max
     read_csv_opts: T.Tuple[T.Tuple[str, T.Any], ...] = ()
 
-    def filter_assets(self, fr):
-        if not self.assets:
+    def pattern(self, header, capture_date=False):
+        return line_re(
+            header,
+            assetCode=choice_re(self.assets),
+            dataType=choice_re(self.sources),
+            windowTimestamp=f"({TSV_FIELD})" if capture_date else None,
+        )
+
+    def filter_assets_dates(self, lines, header):
+        """Filter by asset (if needed) and windowTimestamp"""
+
+    def filter_rows(self, fr, path):
+        start, end = parse_file_period(path)
+        keep_all_dates = self.start <= start and end <= self.end
+        if not self.assets and not self.sources and keep_all_dates:  # no filtering
             return fr
-        pat = re.compile(r"[^\t]*\t(?:{})\t".format("|".join(re.escape(s) for s in self.assets)))
         buf = io.StringIO()
-        buf.write(next(fr))
-        for line in fr:
-            if pat.match(line):
-                buf.write(line)
+        header = next(fr)
+        buf.write(header)
+        pat = self.pattern(header.split("\t"), capture_date=not keep_all_dates)
+        if keep_all_dates:
+            lines = filter(pat.match, fr)
+        else:
+            START, END = (t.strftime("%FT%T.000Z") for t in (self.start, self.end))
+            lines = (line for line in fr if (lambda m: m and START <= m[1] <= END)(pat.match(line)))
+        for line in lines:
+            buf.write(line)
         buf.seek(0)
         return buf
 
-    def read_tsv(self, fr):
+    def read_tsv(self, fr, path):
         import pandas as pd
 
         read_tsv = partial(pd.read_csv, sep="\t", na_values="", **dict(self.read_csv_opts))
-        df: pd.DataFrame = read_tsv(self.filter_assets(fr))  # type:ignore
+        df: pd.DataFrame = read_tsv(self.filter_rows(fr, path))  # type:ignore
         logger.debug(f"{type(self)}: Loaded {len(df)} records")
         if "windowTimestamp" in df.columns:
             df.windowTimestamp = pd.to_datetime(df.windowTimestamp)
@@ -206,7 +246,7 @@ class DataFrameOutput(Output):
 
     def copy_file(self, sftp, fp, attr=None, accum=None):
         with sftp.open(fp, "rb") as fr:
-            df = decompress(fr, fp, lambda f, _: self.read_tsv(f))  # type: ignore
+            df = decompress(fr, fp, self.read_tsv)  # type: ignore
             return df if accum is None else accum.append(df, ignore_index=True)
 
 
@@ -300,6 +340,7 @@ class SFTPClient(CachingSFTPClient):
         end: datetime,
         output: T.Union[Output, str] = "pandas://",
         assets: T.Tuple[str, ...] = (),
+        sources: T.Tuple[str, ...] = (),
         buckets: T.Tuple[Bucket, ...] = (),
         prefix: Path = DEFAULT_PREFIX,
         trial: bool = False,
@@ -314,6 +355,7 @@ class SFTPClient(CachingSFTPClient):
         :param end: period end
         :param output: Output instance, default is DataFrameOutput
         :param assets: Filter by asset (implemented only for DataFrameOutput)
+        :param sources: Filter by dataType (implemented only for DataFrameOutput)
         :param buckets: Restrict search to given directories (daily / minutely / hourly).
         If empty (default), then search in all directories.
         :param prefix: Root folder on remote side
@@ -324,7 +366,8 @@ class SFTPClient(CachingSFTPClient):
         :returns: dataframe if output is DataFrameOutput
         """
         output = output if isinstance(output, Output) else Output.parse(output)
-        output = replace(output, assets=assets) if isinstance(output, DataFrameOutput) else output
+        if isinstance(output, DataFrameOutput):
+            output = replace(output, assets=assets, start=start, end=end, sources=sources)
         copied_period = None
         n_files = 0
         result = None
@@ -464,6 +507,9 @@ def cli_parser() -> ArgumentParser:
     cli.date_arg("start", default=str(date.today()))
     cli.date_arg("end")
     cli.add_argument("--assets", type=lambda s: s.split(","), help="Comma-separated list of assets")
+    cli.add_argument(
+        "--sources", type=lambda s: s.split(","), help="Comma-separated list of sources"
+    )
     cli.enum_arg(Bucket, "--buckets", "-b", action="append", help="Restrict to these time buckets")
     cli.add_argument("--host", default=DEFAULT_HOST, help="Hostname of SFTP server")
     cli.add_argument("--cache", default=DEFAULT_CACHE, help="Cache dir, empty for no cache")
@@ -495,6 +541,7 @@ if __name__ == "__main__":
             frequency=args.frequency,
             buckets=args.buckets,
             assets=args.assets,
+            sources=args.sources,
             template=args.template,
             prefix=args.prefix,
             trial=args.trial,
