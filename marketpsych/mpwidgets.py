@@ -10,8 +10,10 @@ import numpy as np
 
 ASSET_CLASSES = "CMPNY CMPNY_AMER CMPNY_APAC CMPNY_EMEA CMPNY_ESG CMPNY_GRP COM_AGR COM_ENM COU COU_ESG COU_MKT CRYPTO CUR".split()
 CMPNY_CLASSES = "CMPNY CMPNY_AMER CMPNY_APAC CMPNY_EMEA CMPNY_ESG".split()
+ESG_CLASSES = "CMPNY_ESG COU_ESG".split()
 FREQUENCIES = "W365_UDAI WDAI_UDAI WDAI_UHOU W01M_U01M".split()
 HIGH_FREQUENCIES = "WDAI_UHOU W01M_U01M".split()
+DATA_TYPES = "News_Social News News_Headline Social".split()
 NOT_RMAS = "id assetCode windowTimestamp dataType systemVersion ticker".split()
 DEFAULT_FREQUENCY = 'WDAI_UDAI'
 DEFAULT_ASSET_CLASS = 'COM_ENM'
@@ -73,18 +75,22 @@ class LoaderWidgets:
             description='Trial',
             disabled=False
             )
+
         self.asset_class_widget = widgets.Dropdown(
             description='Asset class:',
             disabled=False,
             options=(ASSET_CLASSES),
             value=DEFAULT_ASSET_CLASS
             )
+
         self.frequency_widget = widgets.Dropdown(
             description='Frequency:',
             disabled=False,
-            options=(FREQUENCIES),
+            options=(FREQUENCIES[1:] if self.asset_class_widget.value 
+                not in ESG_CLASSES else FREQUENCIES),
             value=DEFAULT_FREQUENCY
             )
+
         self.start_date_widget = widgets.DatePicker(
             description='Start date:',
             disabled=False,
@@ -95,6 +101,21 @@ class LoaderWidgets:
             disabled=False,
             value = DEFAULT_END
             )
+
+        self.data_type_widget = widgets.SelectMultiple(
+            options=tuple(DATA_TYPES),
+            value = tuple(DATA_TYPES),
+            description='Source:',
+            disabled=False
+        )
+
+        self.assets_widget = widgets.Textarea(
+            value=(''),
+            placeholder='Asset codes (space separated)',
+            description='Assets:',
+            disabled=False
+        )
+
         # Warns the user in case of certain choices
         self.warning_widget = widgets.Output()
 
@@ -103,7 +124,10 @@ class LoaderWidgets:
         self.start_date_widget.observe(self._start_date_handler, names='value')
         self.end_date_widget.observe(self._end_date_handler, names='value')
         self.asset_class_widget.observe(self._memory_event_handler, names='value')
+        self.asset_class_widget.observe(self._frequency_handler, names='value')
         self.frequency_widget.observe(self._memory_event_handler, names='value')
+        self.frequency_widget.observe(self._data_type_handler, names='value')
+        self.asset_class_widget.observe(self._asset_class_handler, names='value')
 
     def _start_date_handler(self, change):
         """Makes sure start_date is datetime.datetime"""
@@ -115,6 +139,18 @@ class LoaderWidgets:
         d = self.end_date_widget.value
         self.end_date_widget.value = datetime.datetime(d.year, d.month, d.day)
 
+    def _frequency_handler(self, change):
+        """Available frequencies depend on asset class"""
+        self.frequency_widget.options = (FREQUENCIES[1:] if \
+            self.asset_class_widget.value not in ESG_CLASSES else FREQUENCIES)
+
+    def _data_type_handler(self, change):
+        """Available dataType depends on frequency"""
+        self.data_type_widget.options = (tuple() if \
+            self.frequency_widget.value == 'W365_UDAI' else tuple(DATA_TYPES))
+        self.data_type_widget.value = (tuple() if \
+            self.frequency_widget.value == 'W365_UDAI' else tuple(DATA_TYPES))
+
     def _memory_event_handler(self, change):
         self.warning_widget.clear_output()
         with self.warning_widget:
@@ -122,19 +158,29 @@ class LoaderWidgets:
                (self.frequency_widget.value in HIGH_FREQUENCIES):
                 print("WARNING: Extremely memory demanding!!!")
 
+    def _asset_class_handler(self, change):
+        """Available frequencies depend on asset class"""
+        self.assets_widget.value = ''
+
     def display(self):
         """
         Display widgets.
         """
-        widgets_ = [self.trial_check_widget,
-                    self.asset_class_widget, 
-                    self.frequency_widget, 
-                    self.start_date_widget, 
-                    self.end_date_widget, 
-                    self.warning_widget]
-        for widget in widgets_:
-            display(widget)
+        display(self.trial_check_widget)
 
+        selector_widgets = widgets.HBox([
+           self.asset_class_widget, self.frequency_widget])
+        display(selector_widgets)
+
+        date_widgets = widgets.HBox([
+           self.start_date_widget, self.end_date_widget])
+        display(date_widgets)
+
+        slicer_widgets = widgets.HBox([
+            self.data_type_widget, self.assets_widget])
+        display(slicer_widgets)
+
+        display(self.warning_widget)
 
 class SlicerWidgets(LoaderWidgets):
     def __init__(self, df):
@@ -144,7 +190,8 @@ class SlicerWidgets(LoaderWidgets):
         self.df_ = df
         # Combobox later only works if assetCode is str
         self.df_.assetCode = df.assetCode.astype(str)
-
+        if 'dataType' not in self.df_.columns:
+            self.df_['dataType'] = 'News_Social'
         self.dataTypes_ = self.df_.dataType.unique().tolist()
         self.assets_ = self.df_.assetCode.unique().tolist()
         self.rmas_ = list(set(self.df_.columns) - set(NOT_RMAS))
@@ -272,8 +319,11 @@ class SlicerWidgets(LoaderWidgets):
             fig, ax = plt.subplots(figsize=(14, 7))
             agg_rma.plot(ax=ax, c="blue", lw=2)
             plt.show()
+
         with self.output:
             display(agg_rma)
+
+        self.agg_rma = agg_rma
 
 
 
