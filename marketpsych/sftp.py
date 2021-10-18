@@ -294,7 +294,7 @@ class CachingSFTPClient(paramiko.SFTPClient):
 
     def open(self, filename, mode="r", bufsize=-1):
         if hasattr(self, "__inside_open"):
-            return super().open(filename=filename, mode=mode, bufsize=bufsize)
+            return super().open(filename=str(filename), mode=mode, bufsize=bufsize)
         setattr(self, "__inside_open", True)
         cached_path = self.ensure_cache(Path(filename))
         fr = open(cached_path, mode)
