@@ -108,6 +108,24 @@ def parse_file_period(filename):
     return parse_period(str(filename).split(".")[4])
 
 
+def sftp_dir(
+    asset_class: AssetClass,
+    frequency: Frequency,
+    bucket: Bucket,
+    prefix=DEFAULT_PREFIX,
+    template: str = DEFAULT_TEMPLATE,
+) -> Path:
+    """SFTP directory for asset_class, frequency, bucket"""
+    return Path(
+        template.format(
+            prefix=str(prefix),
+            asset_class=asset_class.name + ("_COR" if frequency is Frequency.W365_UDAI else ""),
+            bucket=bucket.name,
+            frequency=frequency.name,
+        )
+    )
+
+
 class Output:
     """Object which determines how to copy input files into output file or directory"""
 
@@ -310,19 +328,16 @@ class SFTPClient(CachingSFTPClient):
         """
         template = template or self.detect_template()
         for bucket in buckets or Bucket:
-            dir = template.format(
-                prefix=str(prefix),
-                asset_class=asset_class.name + ("_COR" if frequency is Frequency.W365_UDAI else ""),
-                bucket=bucket.name,
-                frequency=frequency.name,
-            )
-            yield Path(dir)
+            yield sftp_dir(asset_class, frequency, bucket, template=template, prefix=prefix)
+
+    def ls(self, dir):
+        return self.listdir_attr(str(dir))
 
     def matching(
         self, dir: Path, period: Period, copied_period: T.Optional[Period]
     ) -> T.Iterable[T.Tuple[paramiko.SFTPAttributes, Period]]:
         try:
-            listing = self.listdir_attr(str(dir))
+            listing = self.ls(dir)
         except FileNotFoundError as e:
             logger.warning(f"{dir}: {e}")
             return
@@ -440,7 +455,7 @@ def load_private_key(key: T.Union[Path, T.TextIO]):
 
 
 def connect(
-    user: str,
+    user: T.Union[str, int],
     key: T.Union[None, Path, T.TextIO] = None,
     host: str = DEFAULT_HOST,
     cache: Path = DEFAULT_CACHE,
@@ -452,7 +467,7 @@ def connect(
     :param host: SFTP server hostname
     """
     transport = paramiko.Transport(host)
-    transport.connect(username=user, pkey=load_private_key(key or SSH_DIR / user))
+    transport.connect(username=str(user), pkey=load_private_key(key or SSH_DIR / f"{user}.ppk"))
     client: T.Optional[SFTPClient] = SFTPClient.from_transport(transport)  # type:ignore
     if client is None:
         raise Exception("Couldn't connect to SFTP for some reason")
