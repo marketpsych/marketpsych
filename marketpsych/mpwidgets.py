@@ -325,6 +325,55 @@ class SlicerWidgets(LoaderWidgets):
 
         self.agg_rma = agg_rma
 
+        
+class DownloaderWidgets(LoaderWidgets):
+    def __init__(self, df):   
+        """
+        Widgets for downloading the dataframe.
+        """
+
+        self.df_ = df
+
+    
+        """
+        Widget for writing file name
+        """
+        self.filename_widget = widgets.Text(
+        value='MarketPsychData',
+        placeholder='Type name of file to save',
+        description='File name:',
+        disabled=False)
+
+        """
+        Dropdown for file type
+        """
+        self.filetype_widget = widgets.Dropdown(
+        options=['.csv', '.xlsx', '.json', '.dta'], #excel format will need to have date time removed
+        value='.csv',
+        description='File Type:',
+        disabled=False,)
+
+        """
+        Download button
+        """
+        self.download_widget = widgets.Button(
+        description='Click to Download',
+        disabled=False,
+        button_style='', # 'success', 'info', 'warning', 'danger' or ''
+        tooltip='Download File to PC',
+        icon='' )
+
+
+
+    def display(self):
+        """
+        Display widgets.
+        """
+        input_widgets = widgets.HBox([
+            self.filename_widget, self.filetype_widget, self.download_widget])
+        display(input_widgets)
+
+
 
 
 
