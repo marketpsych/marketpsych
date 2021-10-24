@@ -6,6 +6,8 @@ import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
+import warnings
+from marketpsych import sftp
 
 
 ASSET_CLASSES = "CMPNY CMPNY_AMER CMPNY_APAC CMPNY_EMEA CMPNY_ESG CMPNY_GRP COM_AGR COM_ENM COU COU_ESG COU_MKT CRYPTO CUR".split()
@@ -32,12 +34,11 @@ class LoginWidgets:
             multiple=False
             )
 
-        self.id_widget = widgets.Text(
-            value='',
-            placeholder='Type your User ID',
+        self.id_widget = widgets.HTML(
+            value="",
+            placeholder='User ID',
             description='User ID:',
-            disabled=False
-            )
+        )
 
         self.key_widget.observe(self._key_handler, names='value')
 
@@ -55,6 +56,9 @@ class LoginWidgets:
         # Updates ID widget with likely ID number from key name
         self.id_widget.value = self._id_suggest
 
+        # Creates a client
+        self.client = sftp.connect(user=self.id_widget.value, key=self.key_widget.content)
+
     def display(self):
         """
         Display widgets.
@@ -66,10 +70,12 @@ class LoginWidgets:
 
 
 class LoaderWidgets:
-    def __init__(self):
+    def __init__(self, client):
         """
         Widgets for loading the data into notebook.
         """
+        self.client = client
+
         self.trial_check_widget = widgets.Checkbox(
             value=True,
             description='Trial',
@@ -116,6 +122,14 @@ class LoaderWidgets:
             disabled=False
         )
 
+        self.load_button_widget = widgets.Button(
+            description='Load Selection',
+            disabled=False,
+            button_style='', # 'success', 'info', 'warning', 'danger' or ''
+            tooltip='Load data according to selections',
+            icon=''
+            )
+
         # Warns the user in case of certain choices
         self.warning_widget = widgets.Output()
 
@@ -128,6 +142,8 @@ class LoaderWidgets:
         self.frequency_widget.observe(self._memory_event_handler, names='value')
         self.frequency_widget.observe(self._data_type_handler, names='value')
         self.asset_class_widget.observe(self._asset_class_handler, names='value')
+
+        self.load_button_widget.on_click(self._load)
 
     def _start_date_handler(self, change):
         """Makes sure start_date is datetime.datetime"""
@@ -162,6 +178,21 @@ class LoaderWidgets:
         """Available frequencies depend on asset class"""
         self.assets_widget.value = ''
 
+    def _load(self, click):
+        print('Loading...')
+        self.df = self.client.download(
+                    asset_class=sftp.AssetClass[self.asset_class_widget.value],
+                    frequency=sftp.Frequency[self.frequency_widget.value],
+                    start=self.start_date_widget.value,
+                    end=self.end_date_widget.value,
+                    trial=self.trial_check_widget.value,
+                    assets=tuple(self.assets_widget.value.split()),
+                    sources=tuple(self.data_type_widget.value)
+                )
+        display(self.df)
+        print('Done')
+
+
     def display(self):
         """
         Display widgets.
@@ -180,7 +211,11 @@ class LoaderWidgets:
             self.data_type_widget, self.assets_widget])
         display(slicer_widgets)
 
+        display(self.load_button_widget)
+
         display(self.warning_widget)
+
+
 
 class SlicerWidgets(LoaderWidgets):
     def __init__(self, df):
@@ -190,6 +225,7 @@ class SlicerWidgets(LoaderWidgets):
         self.df_ = df
         # Combobox later only works if assetCode is str
         self.df_.assetCode = df.assetCode.astype(str)
+        # To account for ESG Core, which does not have dataType cols
         if 'dataType' not in self.df_.columns:
             self.df_['dataType'] = 'News_Social'
         self.dataTypes_ = self.df_.dataType.unique().tolist()
@@ -302,13 +338,13 @@ class SlicerWidgets(LoaderWidgets):
 
             # Gets both RMA and buzz in the same time format
             agg_rma = self.filtered_rma.copy()
-            agg_rma.index = pd.to_datetime(agg_rma.index).strftime("%Y-%m-%d")
+            #agg_rma.index = pd.to_datetime(agg_rma.index).strftime("%Y-%m-%d")
 
             if self.buzz_weight_widget.value != False:
                 # Gets buzz in correct format
                 self.filtered_buzz = queried_df[[self.buzz_weight_widget.value]]
                 agg_buzz = self.filtered_buzz.copy()
-                agg_buzz.index = pd.to_datetime(agg_buzz.index).strftime("%Y-%m-%d")
+                #agg_buzz.index = pd.to_datetime(agg_buzz.index).strftime("%Y-%m-%d")
                 # Recomputes RMA
                 agg_rma = np.multiply(agg_rma, agg_buzz).rolling(roll, min_periods=min(minval, roll)).sum()
                 agg_rma = np.divide(agg_rma, agg_buzz.rolling(roll, min_periods=1).sum())
@@ -325,6 +361,57 @@ class SlicerWidgets(LoaderWidgets):
 
         self.agg_rma = agg_rma
 
+
+class DownloaderWidgets:
+    def __init__(self, df):
+        """
+        Widgets for downloading the data
+        """
+        self.df_ = df
+        self.file_name = widgets.Text(
+            value='marketpsych_file',
+            placeholder='Type name of file to save',
+            description='File name:',
+            disabled=False
+        )
+        self.extension_options = widgets.Dropdown(
+            options=['.csv', '.xlsx'],
+            value='.csv',
+            description='File Extension:',
+            disabled=False,
+            )
+        self.download_button = widgets.Button(
+            description='Download',
+            disabled=False,
+            button_style='', # 'success', 'info', 'warning', 'danger' or ''
+            tooltip='Download File to PC',
+            icon='' # (FontAwesome names without the `fa-` prefix)
+            )
+
+        self.download_button.on_click(self.download)
+
+    def download(self, click):
+        if self.extension_options.value.endswith('csv'):
+            self.df_.to_csv(f'{self.file_name.value}{self.extension_options.value}')
+        elif self.extension_options.value.endswith('xlsx'):
+            temp_df = self.df_.copy()
+            temp_df['windowTimestamp'] = temp_df['windowTimestamp'].dt.tz_localize(None)
+            temp_df.to_excel(f'{self.file_name.value}{self.extension_options.value}')
+        try:
+            from google.colab import files
+            files.download(f'{self.file_name.value}{self.extension_options.value}')
+        except:
+            pass
+
+
+    def display(self):
+        """
+        Display widgets.
+        """
+        widgets_ = widgets.VBox([
+            self.file_name, self.extension_options, self.download_button
+            ])
+        display(widgets_)
 
 
 
