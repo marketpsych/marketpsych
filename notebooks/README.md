@@ -11,6 +11,8 @@ The notebooks in this folder are end-to-end projects to help you with some commo
 * [III. Aggregation](https://github.com/marketpsych/marketpsych/blob/main/notebooks/iii_aggregation.ipynb)  
     In many situations you may want to aggregate the data in longer time-windows (e.g., monthly, quarterly, yearly, etc.). This notebook demonstrates the two main options for aggregating daily data into a bespoke timeframe.
 
+* [IV. Trading](https://github.com/marketpsych/marketpsych/blob/main/notebooks/iv_trading.ipynb)  
+    Sentiment can be a powerful addition to a quant's toolkit. This notebook gives an example about using the Refinitiv MarketPsych Analytics as features in a quant model for predicting changes in asset prices.
 
 To start, please follow these steps:
 

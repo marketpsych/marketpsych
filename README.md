@@ -13,11 +13,11 @@ For more details check out our [website](https://www.marketpsych.com/).
 
 * **Wide coverage**:
     * 252 countries and territories
-    * 38,000+ global companies, sectors, and ETFs
+    * 110,000+ global companies, sectors, and ETFs
     * 62 stock indexes and sovereign bonds
     * 44 currencies
     * 51 commodities
-    * 300+ cryptocurrencies
+    * 500+ cryptocurrencies
 * **Long history**: 1998 to the present
 * **Multi-language**: sources in 13 languages
 * **AI-based**: machine learning based natural language processing engine
