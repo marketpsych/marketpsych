@@ -12,7 +12,10 @@ The notebooks in this folder are end-to-end projects to help you with some commo
     In many situations you may want to aggregate the data in longer time-windows (e.g., monthly, quarterly, yearly, etc.). This notebook demonstrates the two main options for aggregating daily data into a bespoke timeframe.
 
 * [IV. Trading](https://github.com/marketpsych/marketpsych/blob/main/notebooks/iv_trading.ipynb)  
-    Sentiment can be a powerful addition to a quant's toolkit. This notebook gives an example about using the Refinitiv MarketPsych Analytics as features in a quant model for predicting changes in asset prices.
+    Sentiment can be a powerful addition to a quant's toolkit. This notebook gives an example about using the Refinitiv MarketPsych Analytics (RMA) as features in a quant model for predicting changes in asset prices.
+
+* [V. Macro forecasting](https://github.com/marketpsych/marketpsych/blob/main/notebooks/v_USInflationForecast.ipynb)  
+    This is an example of the use of RMAs as an exogenous variable in an autoregressive model. The notebook shows how to predict inflation in the US using news about the expectations of inflation.
 
 To start, please follow these steps:
 
